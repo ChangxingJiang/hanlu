@@ -7,6 +7,7 @@ import json
 from typing import Any, Dict, Optional
 
 import metasequoia_sql as ms_sql
+from hanlu import special_command
 from hanlu.common import dolphin_utils
 from hanlu.data_node import DHdfsInstance
 from hanlu.data_node import DInstance
@@ -77,7 +78,11 @@ class HanLuAnalyzer(abc.ABC):
     def analyze_shell_script(self, script: str) -> DTask:
         """分析 Shell 脚本"""
         data_task = DTask.empty()
-        simu_system = init_simu_system(hook_func=self.analyze_shell_command_hook, hook_args={"data_task": data_task})
+        simu_system = init_simu_system(
+            configuration=self.hanlu_env.shell_parser_configuration,
+            hook_func=self.analyze_shell_command_hook,
+            hook_args={"data_task": data_task}
+        )
         parse(LexicalFSMShell(script)).execute(simu_system.create_process())
         return data_task
 
@@ -94,18 +99,30 @@ class HanLuAnalyzer(abc.ABC):
                               command_input: SimuCommandInput) -> DTask:
         """分析 Shell 命令"""
         # 跳过不存在有效概念的空命令
-        if command_input.command_name in {"echo", "date"}:
+        if self.hanlu_env.is_shell_ignore_command(command_input.command_name):
             return DTask.empty()
         if command_input.command_name == "beeline":
             return self.analyze_beeline_command(simu_process, command_input)
+        if command_input.command_name == "spark-submit":
+            spark_submit_command = special_command.parse_spark_submit(command_input.command_params)
+            return self.analyze_spark_submit_command(simu_process, spark_submit_command)
 
         if command_input.command_name == "/data/datax/bin/datax.py":
             file_name = command_input.command_params[0]
             file_content = simu_process.read_file(file_name)
+            if file_content is None:
+                print(f"【失败】DataX 配置文件构造失败: {file_content}")
+                return DTask.unknown()
             return self.analyze_datax_config(file_content)
 
         print(f"分析命令: {command_input.command_name} {command_input.command_params}")
         return self.analyze_other_shell_command(simu_process, command_input)
+
+    @abc.abstractmethod
+    def analyze_spark_submit_command(self,
+                                     simu_process: SimuProcess,
+                                     command: special_command.CommandSparkSubmit) -> DTask:
+        """分析 spark-submit 命令"""
 
     @abc.abstractmethod
     def analyze_other_shell_command(self,
@@ -146,10 +163,22 @@ class HanLuAnalyzer(abc.ABC):
                         schema_name=statement.table_name.schema_name,
                         table_name=statement.table_name.table_name
                     ))
+                elif isinstance(statement, ms_sql.node.ASTSelectStatement):
+                    continue  # SELECT 语句不影响血缘关系
+                elif isinstance(statement, ms_sql.node.ASTSetStatement):
+                    continue  # SET 语句不影响血缘关系
+                elif isinstance(statement, ms_sql.node.ASTAnalyzeTableStatement):
+                    continue  # ANALYZE 语句不影响血缘关系
+                elif isinstance(statement, ms_sql.node.ASTTruncateTable):
+                    data_task.add_generate_node(DNode(
+                        instance=data_instance,
+                        schema_name=statement.table_name.schema_name,
+                        table_name=statement.table_name.table_name
+                    ))
                 else:
                     return self.analyze_other_sql(data_instance, sql)
             return data_task
-        except Exception:
+        except Exception as e:
             print(f"SQL 解析失败: {sql}")
             return self.analyze_other_sql(data_instance, sql)
 
@@ -249,6 +278,12 @@ class HanLuAnalyzer(abc.ABC):
 class HanLuDefaultAnalyzer(HanLuAnalyzer):
     """寒露默认分析器"""
 
+    def analyze_spark_submit_command(self,
+                                     simu_process: SimuProcess,
+                                     command_input: SimuCommandInput) -> DTask:
+        print("【失败】需重写 analyze_spark_submit_command 方法")
+        return DTask.unknown()
+
     def analyze_other_dolphin_task(self, record: Dict[str, Any]) -> DTask:
         print("【失败】未知 Dolphin 任务")
         return DTask.unknown()
@@ -260,5 +295,5 @@ class HanLuDefaultAnalyzer(HanLuAnalyzer):
         return DTask.unknown()
 
     def analyze_other_sql(self, data_instance: DInstance, sql: str) -> DTask:
-        print("【失败】未知 sql 语句")
+        print(f"【失败】未知 sql 语句: {sql}")
         return DTask.unknown()

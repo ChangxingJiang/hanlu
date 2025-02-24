@@ -2,22 +2,45 @@
 寒露环境类
 """
 import collections
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from hanlu.data_node import DHdfsInstance
 from hanlu.data_node import DHiveInstance
 from hanlu.data_node import DInstance
 from hanlu.data_node import DMySQLInstance
+from metasequoia_shell.simu_env import SimuConfiguration
 
 __all__ = [
     "HanLuEnv"
 ]
+
+DEFAULT_IGNORE_COMMAND_SET = {
+    "echo",
+    "date",
+    "exit",
+    "awk",
+    "grep",
+    "sed",
+    "egrep",
+    "wc",
+    "exit",
+    "mkdir",
+    "sleep",
+    "rm",
+    "cd"
+    "cd",
+    "chmod",
+    "cat",
+    "sort",
+    "export",
+}
 
 
 class HanLuEnv:
     """寒露环境类"""
 
     def __init__(self):
+        # ------------------------------ 连接信息配置 ------------------------------
         # Hive 主机到 Hive 名称的映射
         self._hive_host_to_name_hash: Dict[str, str] = {}
 
@@ -29,6 +52,43 @@ class HanLuEnv:
 
         # HDFS 信息到 Hive 名称的映射
         self._hdfs_info_to_hive_name_hash: Dict[DHdfsInstance, Dict[str, str]] = collections.defaultdict(dict)
+
+        # ------------------------------ Shell 配置信息 ------------------------------
+        self._shell_ignore_command_set: Set[str] = DEFAULT_IGNORE_COMMAND_SET  # Shell 忽略命令的集合
+        self._shell_configuration = SimuConfiguration()  # Shell 解析器配置信息
+
+    @property
+    def shell_ignore_command_set(self) -> Set[str]:
+        return self._shell_ignore_command_set
+
+    @property
+    def shell_parser_configuration(self) -> SimuConfiguration:
+        return self._shell_configuration
+
+    def is_shell_ignore_command(self, command: str) -> bool:
+        """判断命令是否为 Shell 忽略的命令
+
+        Parameters
+        ----------
+        command : str
+            命令名称
+
+        Returns
+        -------
+        bool
+            是否为 Shell 忽略的命令
+        """
+        return command in self._shell_ignore_command_set
+
+    def add_shell_ignore_command(self, command: str) -> None:
+        """注册 Shell 忽略的命令
+
+        Parameters
+        ----------
+        command : str
+            命令名称
+        """
+        self._shell_ignore_command_set.add(command)
 
     def regist_hive_cluster(self, hosts: List[str], name: str,
                             hdfs_instance: Optional[DHdfsInstance] = None,
